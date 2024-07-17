@@ -9,10 +9,13 @@ use yii\filters\Cors;
 use app\models\Files;
 use app\models\Users;
 use app\models\Coauthors;
+use app\models\Authors;
+
 
 use Codeception\Lib\Interfaces\ActiveRecord;
 
 use FFI;
+use PharIo\Manifest\Author;
 
 class FileController extends \yii\rest\ActiveController
 {
@@ -78,20 +81,34 @@ class FileController extends \yii\rest\ActiveController
                 $model->file = $file;
 
                 if ($res = $model->validate()) {
-
                     $model->name  = $model->file->baseName;
                     $model->extension  = $model->file->extension;
                     $model->file_id = Yii::$app->security->generateRandomString(10);
                     while (!$model->validate()) {
                         $model->file_id = Yii::$app->security->generateRandomString(10);
                     }
-                    $model->user_id = $identity->id;
-
                     $model->url = Yii::$app->request->getHostInfo() . '/api/files/' . $model->file_id;
 
-                    if ($model->save()) {
-                        $dir = Yii::getAlias('@app/uploads/');
 
+                    if (!$model->isUniqueName($identity->id, $model->name)) {
+                        $i = 1;
+                        $name = $model->name;
+                        while (!$model->isUniqueName($identity->id, $name)) {
+                            $name = $model->name . "($i)" . $model->extension;
+                            $i++;
+                        }
+                        // var_dump('rer');die;
+                        $model->name = $name;
+                    }
+                    if ($model->save()) {
+                        $model = Files::findOne(['file_id' => $model->file_id]);
+                        $fileInfo = new Authors();
+                        $fileInfo->user_id = $identity->id;
+                        $fileInfo->file_id = $model->id;
+                        $fileInfo->role_id = 1;
+                        $fileInfo->save(false);
+
+                        $dir = Yii::getAlias('@app/uploads/');
                         if (!file_exists($dir)) {
                             mkdir($dir, 0777, true);
                         }
@@ -147,15 +164,24 @@ class FileController extends \yii\rest\ActiveController
         if ($identity) {
             $data = Yii::$app->request->post();
             $file = Files::findOne(['file_id' => $file_id]);
-            // var_dump($file);die;
             if ($file) {
-                if ($identity->id == $file->user_id || $identity->id == $file->co_author) {
-                    // var_dump();die;
+                $user = Authors::findOne(['user_id' => $identity->id, 'file_id' => $file->id]);
+                if ($user) {
 
                     $file->name = $data['name'];
                     $file->validate();
                     if (!$file->hasErrors()) {
 
+                        if (!$file->isUniqueName($identity->id, $file->name)) {
+                            $i = 1;
+                            $name = $file->name;
+                            while (!$file->isUniqueName($identity->id, $name)) {
+                                $name = $file->name . "($i)" . $file->extension;
+                                $i++;
+                            }
+                            // var_dump('rer');die;
+                            $file->name = $name;
+                        }
                         $file->save();
                         Yii::$app->response->statusCode = 200;
 
@@ -208,9 +234,9 @@ class FileController extends \yii\rest\ActiveController
         $result = [];
         if ($identity) {
             $file = Files::findOne(['file_id' => $file_id]);
-            // var_dump($file);die;
             if ($file) {
-                if ($identity->id == $file->user_id || $identity->id == $file->co_author) {
+                $user = Authors::findOne(['user_id' => $identity->id, 'file_id' => $file->id]);
+                if ($user) {
                     $dir = Yii::getAlias('@app/uploads/');
                     $pathInfo = $dir . $file->file_id . '.' . $file->extension;
                     if (file_exists($pathInfo)) {
@@ -267,9 +293,9 @@ class FileController extends \yii\rest\ActiveController
         // var_dump('dasd');die;
         if ($identity) {
             $file = Files::findOne(['file_id' => $file_id]);
-            // var_dump($file);die;
+            $auth = Authors::findOne(['user_id' => $identity->id, 'file_id' => $file->id]);
             if ($file) {
-                if ($identity->id == $file->user_id || $identity->id == $file->co_author) {
+                if ($auth && Authors::isAuthor($auth->role_id)) {
                     $dir = Yii::getAlias('@app/uploads/');
                     $pathInfo = $dir . $file->file_id . '.' . $file->extension;
                     if (file_exists($pathInfo)) {
@@ -322,52 +348,38 @@ class FileController extends \yii\rest\ActiveController
             $file = Files::findOne(['file_id' => $file_id]);
             if ($file) {
                 $file->scenario = 'coAuth';
-                if ($identity->id == $file->user_id) {
+                $auth = Authors::findOne(['user_id' => $identity->id, 'file_id' => $file->id]);
+                if ($auth && Authors::isAuthor($auth->role_id)) {
                     $user = Users::findOne(['email' => $data['email']]);
                     if ($user) {
-
-                        $co_author = new CoAuthors;
+                        $co_author = new Authors;
                         $co_author->file_id = $file->id;
-                        $co_author->co_auth_id = $user->id;
+                        $co_author->user_id = $user->id;
+                        $co_author->role_id = 2;
                         if ($co_author->save()) {
-
-                            $file->co_author = $user->id;
-                            // var_dump($file->co_author);die;
-                            $author = Files::find()
-                                ->select([
-                                    'first_name',
-                                    'last_name',
-                                    'email',
-                                ])
-                                ->innerJoin('user as us1', 'us1.id = file.user_id')
-                                ->asArray()
-                                ->all();
-
                             // var_dump('fds');die;
-                            $users = Coauthors::find()
+                            $coauths = Authors::find()
                                 ->select([
                                     'first_name',
                                     'last_name',
                                     'email',
+                                    'role.role'
                                 ])
-                                ->innerJoin('user', 'user.id = coauthors.co_auth_id')
                                 ->innerJoin('file', 'file.id = coauthors.file_id')
+                                ->innerJoin('user', 'user.id = coauthors.user_id')
+                                ->innerJoin('role', 'Coauthors.role_id = role.id')
+                                ->where(['file.file_id' => $file->file_id])
                                 ->asArray()
                                 ->all();
-                            Yii::$app->response->statusCode = 200;
-                            $result[] = [
-                                'name' => $author[0]['first_name'] . $author[0]['last_name'],
-                                'email' => $author[0]['email'],
-                                'type' => 'author,'
-
-                            ];
-                            foreach ($users as $user) {
-
-                                $result[] = [
-                                    'name' => $user['first_name'] . $user['last_name'],
-                                    'email' => $user['email'],
-                                    'type' => 'co_auth',
-                                ];
+                            // var_dump($coauths);die;
+                            if (!empty($coauths)) {
+                                foreach ($coauths as $auth) {
+                                    $result[$file['file_id']]['accesses'][] = [
+                                        'fullname' => $auth['last_name'] . $auth['last_name'],
+                                        'email' => $auth['email'],
+                                        'type' => $auth['role'],
+                                    ];
+                                }
                             }
                         } else {
                             Yii::$app->response->statusCode = 422;
@@ -426,50 +438,41 @@ class FileController extends \yii\rest\ActiveController
             $file = Files::findOne(['file_id' => $file_id]);
             if ($file) {
                 $file->scenario = 'coAuth';
-                if ($identity->id == $file->user_id) {
+
+                $auth = Authors::findOne(['user_id' => $identity->id, 'file_id' => $file->id]);
+                if ($auth && Authors::isAuthor($auth->role_id)) {
                     $user = Users::findOne(['email' => $data['email']]);
                     if ($user) {
 
-                        $co_author = Coauthors::findOne(['co_auth_id' => $user->id]);
-                        if ($co_author->delete()) {
+                        $co_author = Authors::findOne(['user_id' => $user->id, 'file_id' => $file->id, 'role_id' => 2]);
+                        if ($co_author && $co_author->delete()) {
 
-                            $file->co_author = $user->id;
                             // var_dump($file->co_author);die;
-                            $author = Files::find()
-                                ->select([
-                                    'first_name',
-                                    'last_name',
-                                    'email',
-                                ])
-                                ->innerJoin('user as us1', 'us1.id = file.user_id')
-                                ->asArray()
-                                ->all();
 
                             // var_dump('fds');die;
-                            $users = Coauthors::find()
+                            $coauths = Authors::find()
                                 ->select([
                                     'first_name',
                                     'last_name',
                                     'email',
+                                    'role.role'
                                 ])
-                                ->innerJoin('user', 'user.id = coauthors.co_auth_id')
                                 ->innerJoin('file', 'file.id = coauthors.file_id')
+                                ->innerJoin('user', 'user.id = coauthors.user_id')
+                                ->where(['file.file_id' => $file->file_id])
+
+                                ->innerJoin('role', 'coauthors.role_id = role.id')
                                 ->asArray()
                                 ->all();
-                            Yii::$app->response->statusCode = 200;
-                            $result[] = [
-                                'name' => $author[0]['first_name'] . $author[0]['last_name'],
-                                'email' => $author[0]['email'],
-                                'type' => 'author,'
-
-                            ];
-                            foreach ($users as $user) {
-
-                                $result[] = [
-                                    'name' => $user['first_name'] . $user['last_name'],
-                                    'email' => $user['email'],
-                                    'type' => 'co_auth',
-                                ];
+                            // var_dump($coauths);die;
+                            if (!empty($coauths)) {
+                                foreach ($coauths as $auth) {
+                                    $result[$file['file_id']]['accesses'][] = [
+                                        'fullname' => $auth['last_name'] . $auth['last_name'],
+                                        'email' => $auth['email'],
+                                        'type' => $auth['role'],
+                                    ];
+                                }
                             }
                         } else {
                             Yii::$app->response->statusCode = 404;
@@ -528,52 +531,45 @@ class FileController extends \yii\rest\ActiveController
                     'file.file_id',
                     'url',
                     'file.name',
-                    'auth.first_name as authName',
-                    'auth.last_name as authNname',
-                    'auth.email as authEmail',
                 ])
-                ->innerJoin('user as auth', 'auth.id = file.user_id')
+
                 ->asArray()
                 ->all();
-
-                // var_dump($files);die;
             foreach ($files as $file) {
-                    $result[$file['file_id']] = [
-                        'file_id' => $file['file_id'],
-                        'name' => $file['name'],
-                        'code' => 200,
-                        'url' => $file['url'],
-                        'accesses' => []
-                    ];
+                $result[$file['file_id']] = [
+                    'file_id' => $file['file_id'],
+                    'name' => $file['name'],
+                    'code' => 200,
+                    'url' => $file['url'],
+                    'accesses' => []
+                ];
 
-                    // Добавляем автора
-                    $result[$file['file_id']]['accesses'][] = [
-                        'fullname' => $file['authName'].$file['authNname'],
-                        'email' => $file['authEmail'],
-                        'type' => 'author'
-                    ];
+                // Добавляем автора
 
-                    $coauths = Coauthors::find()
+                $coauths = Authors::find()
                     ->select([
                         'first_name',
                         'last_name',
                         'email',
+                        'role.role'
                     ])
-                    ->innerJoin('file', 'file.id = Coauthors.file_id')
-                    ->innerJoin('user', 'user.id = Coauthors.co_auth_id')
+                    ->innerJoin('file', 'file.id = coauthors.file_id')
+                    ->where(['file.file_id' => $file['file_id']])
+                    ->innerJoin('user', 'user.id = coauthors.user_id')
+                    ->innerJoin('role', 'coauthors.role_id = role.id')
                     ->asArray()
                     ->all();
-                    if (!empty($coauths)) {
-                        foreach ($coauths as $auth) {
-                            $result[$file['file_id']]['accesses'][] = [
-                                'fullname' => $auth['last_name'].$auth['last_name'],
-                                'email' => $auth['email'],
-                                'type' => 'co_author'
-                            ];
-                        }
+                // var_dump($coauths);
+                // die;
+                if (!empty($coauths)) {
+                    foreach ($coauths as $auth) {
+                        $result[$file['file_id']]['accesses'][] = [
+                            'fullname' => $auth['last_name'] . $auth['last_name'],
+                            'email' => $auth['email'],
+                            'type' => $auth['role'],
+                        ];
                     }
-                    
-              
+                }
             }
         } else {
             Yii::$app->response->statusCode = 403;

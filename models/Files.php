@@ -8,6 +8,7 @@ use yii\web\IdentityInterface;
 use yii\behaviors\TimestampBehavior;
 use yii\db\Expression;;
 use app\models\Users;
+use Faker\Core\File;
 
 /**
  * This is the model class for table "file".
@@ -48,12 +49,9 @@ class Files extends \yii\db\ActiveRecord
     {
         return [
             // [['file_id', 'extension', 'name', 'user_id', 'created_at', 'updated_at', 'new_field', 'co_author'], 'safe'],
-            [['user_id'], 'integer'],
+            // [['user_id'], 'integer'],
             [['created_at', 'name', 'updated_at'], 'safe'],
-            [['name'], 'unique', 'targetAttribute'=>['name','user_id']],
             [['file_id', 'extension', 'url'], 'string', 'max' => 255],
-            [['user_id'], 'exist', 'skipOnError' => true, 'targetClass' => Users::class, 'targetAttribute' => ['user_id' => 'id']],
-            [['co_author'], 'exist', 'skipOnError' => true, 'targetClass' => Users::class, 'targetAttribute' => ['co_author' => 'email']],
             [['file'], 'file', 'extensions'=> ['doc', 'pdf', 'docx', 'zip', 'jpeg', 'jpg'], 'maxSize'=>2*1024*1024],
 
             [['name'], 'string', 'max'=>255 ],
@@ -61,6 +59,24 @@ class Files extends \yii\db\ActiveRecord
             [['co_author'], 'required','on'=>static::SCENARIO_CO],
 
         ];
+    }
+
+
+    public function isUniqueName($user_id, $name)
+    {
+        // var_dump($user_id, $name);die;
+        $name = Static::find()
+        ->select([
+            'name'
+        ])
+        ->innerJoin('coauthors', 'coauthors.file_id =' . 'file.id')
+        ->innerJoin('user', 'user.id = coauthors.user_id')
+        ->innerJoin('role', 'role.id = coauthors.role_id')
+        ->where(['coauthors.user_id' => $user_id, 'coauthors.role_id' => 1, 'name' => $name])
+        ->asArray()
+        ->all();
+        // var_dump(empty($name), $name);die;
+        return empty($name);
     }
 
     /**
@@ -73,10 +89,8 @@ class Files extends \yii\db\ActiveRecord
             'file_id' => 'File ID',
             'extension' => 'Расширение',
             'name' => 'Имя',
-            'user_id' => 'User ID',
             'created_at' => 'Created At',
             'updated_at' => 'Updated At',
-            'co_author' => 'Co Author',
         ];
     }
 
@@ -95,10 +109,10 @@ class Files extends \yii\db\ActiveRecord
      *
      * @return \yii\db\ActiveQuery
      */
-    public function getUser()
-    {
-        return $this->hasOne(Users::class, ['id' => 'user_id']);
-    }
+    // public function getUser()
+    // {
+    //     // return $this->hasOne(Users::class, ['id' => 'user_id']);
+    // }
 
     public function behaviors()
     {
